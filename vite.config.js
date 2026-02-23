@@ -1,9 +1,8 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/react-swc'
+import react from '@vitejs/react-vite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // This ensures the site works at thanhtong.xyz/thanhsmap
-  base: '/thanhsmap/', 
+  base: '/thanhsmap/', // This ensures assets load from the sub-folder
 })
