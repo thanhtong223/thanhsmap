@@ -16,13 +16,27 @@ function App() {
   const [locations, setLocations] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // 1. FETCH LIVE DATA FROM GOOGLE SHEETS
+  // 1. FETCH & SANITIZE LIVE DATA FROM GOOGLE SHEETS
   useEffect(() => {
     Papa.parse(SHEET_CSV_URL, {
       download: true,
       header: true,
       complete: (results) => {
-        setLocations(results.data.filter(loc => loc.lat && loc.lng));
+        // FIX: Clean the Google Sheets data to remove invisible characters
+        const cleanedData = results.data.map(row => {
+          const newRow = {};
+          Object.keys(row).forEach(key => {
+            // Remove BOM, trim spaces, and lowercase the column name
+            const cleanKey = key.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().toLowerCase();
+            newRow[cleanKey] = row[key];
+          });
+          return newRow;
+        });
+
+        console.log("✅ Sanitized Sheet Data:", cleanedData); // Check your browser console!
+        
+        // Filter out empty rows (ensure lat/lng exist)
+        setLocations(cleanedData.filter(loc => loc.lat && loc.lng));
       }
     });
   }, []);
@@ -63,25 +77,47 @@ function App() {
     map.current.on('moveend', () => { spinGlobe(); });
   }, []);
 
-  // 3. RENDER MARKERS, POPUPS & FLIGHT PATHS
+  // 3. RENDER MARKERS, POPUPS & ID-BASED FLIGHT PATHS
   useEffect(() => {
     if (!map.current || locations.length === 0) return;
 
-    // --- DRAW FLIGHT ROUTES ---
+    // --- DRAW CUSTOM FLIGHT ROUTES (BASED ON ID) ---
     const addRoute = () => {
-      const coordinates = locations.map(loc => [parseFloat(loc.lng), parseFloat(loc.lat)]);
+      const features = [];
+
+      locations.forEach(loc => {
+        // Now loc.connects_to and loc.id will definitively work
+        if (loc.connects_to) {
+          const targetIds = String(loc.connects_to).split(',').map(id => id.trim());
+
+          targetIds.forEach(targetId => {
+            const targetLoc = locations.find(l => String(l.id).trim() === targetId);
+            
+            if (targetLoc && loc.lat && loc.lng && targetLoc.lat && targetLoc.lng) {
+              features.push({
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'LineString',
+                  coordinates: [
+                    [parseFloat(loc.lng), parseFloat(loc.lat)],
+                    [parseFloat(targetLoc.lng), parseFloat(targetLoc.lat)]
+                  ]
+                }
+              });
+            }
+          });
+        }
+      });
+
+      const geojsonData = { type: 'FeatureCollection', features: features };
 
       if (map.current.getSource('flight-route')) {
-        map.current.getSource('flight-route').setData({
-          type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates }
-        });
+        map.current.getSource('flight-route').setData(geojsonData);
       } else {
-        map.current.addSource('flight-route', {
-          type: 'geojson',
-          data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } }
-        });
+        map.current.addSource('flight-route', { type: 'geojson', data: geojsonData });
 
-        // The glowing cyan background aura
+        // Glowing cyan background aura
         map.current.addLayer({
           id: 'flight-route-glow',
           type: 'line',
@@ -94,7 +130,7 @@ function App() {
           }
         });
 
-        // The solid/dashed flight path
+        // Dotted flight path line
         map.current.addLayer({
           id: 'flight-route-line',
           type: 'line',
@@ -121,10 +157,9 @@ function App() {
       const el = document.createElement('div');
       el.className = 'destination-marker';
       
-      // FIX: Added 'marker-animator' wrapper to prevent Mapbox coordinate lag
       el.innerHTML = `
         <div class="marker-animator">
-          <div class="marker-label">${loc.name.toUpperCase()}</div>
+          <div class="marker-label">${loc.name ? loc.name.toUpperCase() : 'UNKNOWN'}</div>
           <div class="marker-line"></div>
           <div class="marker-dot"></div>
         </div>
@@ -166,7 +201,16 @@ function App() {
 
   const handleGoHome = () => {
     isFlying.current = true; 
-    map.current.flyTo({ center: [106.6297, 10.8231], zoom: 1.5, pitch: 0, duration: 5000, essential: true });
+    
+    // Smooth cinematic zoom out to current location axis
+    map.current.flyTo({ 
+      zoom: 1.5, 
+      pitch: 0, 
+      bearing: 0, 
+      duration: 4000, 
+      essential: true 
+    });
+    
     map.current.once('moveend', () => {
       isFlying.current = false;
       spinGlobe();
@@ -200,7 +244,7 @@ function App() {
         .popup-title { margin: 0 0 4px 0; font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
         .popup-desc { margin: 0; font-size: 13px; color: rgba(255,255,255,0.7); line-height: 1.5; }
 
-        /* Animated Markers (FIXED LAG) */
+        /* Animated Markers */
         .destination-marker { cursor: pointer; }
         .marker-animator { display: flex; flex-direction: column; align-items: center; transition: transform 0.2s ease; }
         .destination-marker:hover .marker-animator { transform: scale(1.1); }
@@ -226,7 +270,6 @@ function App() {
           .header-title { font-size: 20px !important; }
           .header-subtitle { font-size: 10px !important; }
           
-          /* Move buttons to bottom center on mobile */
           .controls-container { 
             top: auto !important; 
             bottom: 40px !important; 
